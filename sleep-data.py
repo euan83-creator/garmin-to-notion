@@ -12,9 +12,17 @@ local_tz = pytz.timezone("America/New_York")
 load_dotenv()
 CONFIG = dotenv_values()
 
+# ------------------------ Helper Functions ------------------------
+
 def get_sleep_data(garmin):
+    """Fetch today's sleep data from Garmin Connect"""
     today = datetime.today().date()
     return garmin.get_sleep_data(today.isoformat())
+
+def get_body_battery_max(garmin, date):
+    """Fetch max Body Battery for a specific date"""
+    bb_data = garmin.get_body_battery(date)
+    return bb_data.get("bodyBatteryHighestValue", 0) if bb_data else 0
 
 def format_duration(seconds):
     minutes = (seconds or 0) // 60
@@ -36,14 +44,17 @@ def format_date_for_name(sleep_date):
     return datetime.strptime(sleep_date, "%Y-%m-%d").strftime("%d.%m.%Y") if sleep_date else "Unknown"
 
 def sleep_data_exists(client, database_id, sleep_date):
+    """Check if sleep data for a specific date already exists in Notion"""
     query = client.databases.query(
         database_id=database_id,
         filter={"property": "Long Date", "date": {"equals": sleep_date}}
     )
     results = query.get('results', [])
-    return results[0] if results else None  # Ensure it returns None instead of causing IndexError
+    return results[0] if results else None
 
-def create_sleep_data(client, database_id, sleep_data, skip_zero_sleep=True):
+# ------------------------ Main Function to Create Notion Entry ------------------------
+
+def create_sleep_data(client, database_id, sleep_data, body_battery_max, skip_zero_sleep=True):
     daily_sleep = sleep_data.get('dailySleepDTO', {})
     if not daily_sleep:
         return
@@ -52,7 +63,6 @@ def create_sleep_data(client, database_id, sleep_data, skip_zero_sleep=True):
     total_sleep = sum(
         (daily_sleep.get(k, 0) or 0) for k in ['deepSleepSeconds', 'lightSleepSeconds', 'remSleepSeconds']
     )
-    
     
     if skip_zero_sleep and total_sleep == 0:
         print(f"Skipping sleep data for {sleep_date} as total sleep is 0")
@@ -73,22 +83,23 @@ def create_sleep_data(client, database_id, sleep_data, skip_zero_sleep=True):
         "Deep Sleep": {"rich_text": [{"text": {"content": format_duration(daily_sleep.get('deepSleepSeconds', 0))}}]},
         "REM Sleep": {"rich_text": [{"text": {"content": format_duration(daily_sleep.get('remSleepSeconds', 0))}}]},
         "Awake Time": {"rich_text": [{"text": {"content": format_duration(daily_sleep.get('awakeSleepSeconds', 0))}}]},
-        "Resting HR": {"number": sleep_data.get('restingHeartRate', 0)}
+        "Resting HR": {"number": sleep_data.get('restingHeartRate', 0)},
+        "Body Battery Max": {"number": body_battery_max},
     }
     
     client.pages.create(parent={"database_id": database_id}, properties=properties, icon={"emoji": "😴"})
-    print(f"Created sleep entry for: {sleep_date}")
+    print(f"Created sleep + Body Battery entry for: {sleep_date}")
+
+# ------------------------ Main Script ------------------------
 
 def main():
     load_dotenv()
 
-    # Initialize Garmin and Notion clients using environment variables
     garmin_email = os.getenv("GARMIN_EMAIL")
     garmin_password = os.getenv("GARMIN_PASSWORD")
     notion_token = os.getenv("NOTION_TOKEN")
     database_id = os.getenv("NOTION_SLEEP_DB_ID")
 
-    # Initialize Garmin client and login
     garmin = Garmin(garmin_email, garmin_password)
     garmin.login()
     client = Client(auth=notion_token)
@@ -97,7 +108,9 @@ def main():
     if data:
         sleep_date = data.get('dailySleepDTO', {}).get('calendarDate')
         if sleep_date and not sleep_data_exists(client, database_id, sleep_date):
-            create_sleep_data(client, database_id, data, skip_zero_sleep=True)
+            # Fetch max Body Battery for the same day
+            bb_max = get_body_battery_max(garmin, sleep_date)
+            create_sleep_data(client, database_id, data, bb_max, skip_zero_sleep=True)
 
 if __name__ == '__main__':
     main()
