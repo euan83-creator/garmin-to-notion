@@ -18,11 +18,21 @@ def get_sleep_data(garmin):
     """Fetch today's sleep data from Garmin Connect"""
     today = datetime.today().date()
     return garmin.get_sleep_data(today.isoformat())
+    
 
 def get_body_battery_max(garmin, date):
     """Fetch max Body Battery for a specific date"""
     bb_data = garmin.get_body_battery(date)
-    return bb_data.get("bodyBatteryHighestValue", 0) if bb_data else 0
+    
+    if isinstance(bb_data, list):  # If the response is a list
+        # If there are any elements in the list, return the max value from the first entry, otherwise return 0
+        if bb_data:
+            return max(bb_data, key=lambda x: x.get("bodyBatteryHighestValue", 0), default={"bodyBatteryHighestValue": 0}).get("bodyBatteryHighestValue", 0)
+        else:
+            return 0
+    else:
+        return bb_data.get("bodyBatteryHighestValue", 0) if bb_data else 0
+
 
 def format_duration(seconds):
     minutes = (seconds or 0) // 60
